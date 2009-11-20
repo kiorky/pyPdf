@@ -1,2 +1,4 @@
 from pdf import PdfFileReader, PdfFileWriter
-__all__ = ["pdf"]
+from merger import PdfFileMerger
+
+__all__ = ["pdf", "PdfFileMerger"]

@@ -581,6 +581,45 @@ class DictionaryObject(dict, PdfObject):
             return retval
     readFromStream = staticmethod(readFromStream)
 
+class TreeObject(DictionaryObject):
+    def __init__(self):
+        DictionaryObject.__init__(self)
+        
+    def hasChildren(self):
+        return self.has_key('/First')
+    
+    def __iter__(self):
+        return self.children()
+        
+    def children(self):
+        if not self.hasChildren():
+            raise StopIteration
+            
+        child = self['/First']
+        while True:
+            yield child
+            if child == self['/Last']:
+                raise StopIteration
+            child = child['/Next']
+        
+    def addChild(self, child, pdf):
+        childObj = child.getObject()
+        
+        if not self.has_key('/First'):
+            self[NameObject('/First')] = child
+            self[NameObject('/Count')] = NumberObject(0)
+            prev = None
+        else:
+            prev = self['/Last']
+
+        self[NameObject('/Last')] = child
+        self[NameObject('/Count')] = NumberObject(self['/Count'] + 1)
+
+        if prev:
+            childObj[NameObject('/Prev')] = pdf.getReference(prev)
+            prev[NameObject('/Next')] = child
+
+        childObj[NameObject('/Parent')] = pdf.getReference(self)
 
 class StreamObject(DictionaryObject):
     def __init__(self):

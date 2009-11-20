@@ -94,6 +94,12 @@ class PdfFileWriter(object):
         if ido.pdf != self:
             raise ValueError("pdf must be self")
         return self._objects[ido.idnum - 1]
+        
+    def getReference(self, obj):
+        idnum = self._objects.index(obj) + 1
+        ref = IndirectObject(idnum, 0, pdf)
+        assert ref.getObject() == obj
+        return ref
 
     ##
     # Common method for inserting or adding a page to this PDF file.
