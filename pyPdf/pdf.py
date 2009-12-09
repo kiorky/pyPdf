@@ -97,7 +97,7 @@ class PdfFileWriter(object):
         
     def getReference(self, obj):
         idnum = self._objects.index(obj) + 1
-        ref = IndirectObject(idnum, 0, pdf)
+        ref = IndirectObject(idnum, 0, self)
         assert ref.getObject() == obj
         return ref
 

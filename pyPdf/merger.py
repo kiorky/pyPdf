@@ -266,16 +266,13 @@ class PdfFileMerger(object):
         root = pdf.getObject(pdf._root)
         if root.has_key('/Outlines'):
             outline = root['/Outlines']
-            idnum = pdf._objects.index(outline) + 1
-            outlineRef = IndirectObject(idnum, 0, pdf)
-            assert outlineRef.getObject() == outline
+            outlineRef = pdf.getReference(outline)
             lastBookmark = outline['/Last']
         else:
             outline = TreeObject()
             outline.update({
             })
             outlineRef = pdf._addObject(outline)
-            outline.ref = outlineRef
             root[NameObject('/Outlines')] = outlineRef
 
         if parent == None:
@@ -293,6 +290,6 @@ class PdfFileMerger(object):
         bookmark.ref = bookmarkRef
         
         parent = parent.getObject()
-        parent.addChild(bookmarkRef)
+        parent.addChild(bookmarkRef, pdf)
         
         return bookmarkRef
