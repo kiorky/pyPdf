@@ -347,6 +347,9 @@ class PdfFileWriter(object):
 # @param stream An object that supports the standard read and seek methods
 #               similar to a file object.
 class PdfFileReader(object):
+	class InternalObjectException(Exception):
+    	pass
+    	
     def __init__(self, stream):
         self.flattenedPages = None
         self.resolvedObjects = {}
@@ -454,10 +457,10 @@ class PdfFileReader(object):
                 tree = catalog["/Dests"]
             elif catalog.has_key("/Names"):
                 names = catalog['/Names']
-                if names.has_key("/Dests"):
+                if isinstance(names, DictionaryObject) and names.has_key("/Dests"):
                     tree = names['/Dests']
         
-        if tree == None:
+        if tree == None or not isinstance(tree, DictionaryObject):
             return retval
 
         if tree.has_key("/Kids"):
@@ -498,7 +501,7 @@ class PdfFileReader(object):
             # get the outline dictionary and named destinations
             if catalog.has_key("/Outlines"):
                 lines = catalog["/Outlines"]
-                if lines.has_key("/First"):
+                if isinstance(lines, DictionaryObject) and lines.has_key("/First"):
                     node = lines["/First"]
             self._namedDests = self.getNamedDestinations()
             
@@ -619,10 +622,18 @@ class PdfFileReader(object):
             return self.resolvedObjects[0][indirectReference.idnum]
         start = self.xref[indirectReference.generation][indirectReference.idnum]
         self.stream.seek(start, 0)
-        idnum, generation = self.readObjectHeader(self.stream)
-        assert idnum == indirectReference.idnum
-        assert generation == indirectReference.generation
-        retval = readObject(self.stream, self)
+        idnum = indirectReference.idnum
+        generation = indirectReference.generation
+        try:
+            idnum, generation = self.readObjectHeader(self.stream)
+            assert idnum == indirectReference.idnum
+            assert generation == indirectReference.generation
+        except InternalObjectException:
+            retval = NullObject()
+        except AssertionError:
+            retval = NullObject()
+        else:
+            retval = readObject(self.stream, self)
 
         # override encryption is used for the /Encrypt dictionary
         if not self._override_encryption and self.isEncrypted:
@@ -666,7 +677,16 @@ class PdfFileReader(object):
         obj = stream.read(3)
         readNonWhitespace(stream)
         stream.seek(-1, 1)
-        return int(idnum), int(generation)
+        try:
+            idnum = int(idnum)
+            generation = int(generation)
+            assert idnum >= 1
+            assert generation >= 0
+        except ValueError:
+            raise InternalObjectException("Non-numeric object id, xref table is probably incorrect")
+        except AssertionError:
+            raise InternalObjectException("Invalid object id, xref table is possibly incorrect")
+        return idnum, generation
 
     def cacheIndirectObject(self, generation, idnum, obj):
         if not self.resolvedObjects.has_key(generation):
