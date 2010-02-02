@@ -54,6 +54,8 @@ from generic import *
 from utils import readNonWhitespace, readUntilWhitespace, ConvertFunctionsToVirtualList
 from sets import ImmutableSet
 
+class InternalObjectException(Exception):
+    pass
 ##
 # This class supports writing PDF files out, given pages produced by another
 # class (typically {@link #PdfFileReader PdfFileReader}).
@@ -85,6 +87,7 @@ class PdfFileWriter(object):
             NameObject("/Pages"): self._pages,
             })
         self._root = self._addObject(root)
+        self._swept_cache = {}  # cache of objects that have already been swept for references
 
     def _addObject(self, obj):
         self._objects.append(obj)
@@ -288,7 +291,10 @@ class PdfFileWriter(object):
         stream.write("\nstartxref\n%s\n%%%%EOF\n" % (xref_location))
 
     def _sweepIndirectReferences(self, externMap, data):
+        if id(data) in self._swept_cache:
+            return data
         if isinstance(data, DictionaryObject):
+            self._swept_cache[id(data)] = 1
             for key, value in data.items():
                 origvalue = value
                 value = self._sweepIndirectReferences(externMap, value)
@@ -299,6 +305,7 @@ class PdfFileWriter(object):
                 data[key] = value
             return data
         elif isinstance(data, ArrayObject):
+            self._swept_cache[id(data)] = 1
             for i in range(len(data)):
                 value = self._sweepIndirectReferences(externMap, data[i])
                 if isinstance(value, StreamObject):
@@ -310,6 +317,10 @@ class PdfFileWriter(object):
         elif isinstance(data, IndirectObject):
             # internal indirect references are fine
             if data.pdf == self:
+                ident = "%s %s" % (data.idnum, data.generation)
+                if ident in self._swept_cache:
+                    return data
+                self._swept_cache[ident] = 1
                 if data.idnum in self.stack:
                     return data
                 else:
@@ -337,7 +348,6 @@ class PdfFileWriter(object):
         else:
             return data
 
-
 ##
 # Initializes a PdfFileReader object.  This operation can take some time, as
 # the PDF stream's cross-reference tables are read into memory.
@@ -347,9 +357,7 @@ class PdfFileWriter(object):
 # @param stream An object that supports the standard read and seek methods
 #               similar to a file object.
 class PdfFileReader(object):
-	class InternalObjectException(Exception):
-    	pass
-    	
+        
     def __init__(self, stream):
         self.flattenedPages = None
         self.resolvedObjects = {}
