@@ -243,7 +243,9 @@ class PdfFileWriter(object):
 
         externalReferenceMap = {}
         self.stack = []
+        self._swept_cache = {}
         self._sweepIndirectReferences(externalReferenceMap, self._root)
+        self._swept_cache = {}
         del self.stack
 
         # Begin writing:
@@ -487,6 +489,13 @@ class PdfFileReader(object):
                 if dest != None:
                     retval[key] = dest
 
+        if not tree.has_key("/Names") and not tree.has_key("/Kids"):
+            for key in tree.keys():
+                if isinstance(tree[key], ArrayObject) and isinstance(tree[key][0], PdfObject):
+                    dest = self._buildDestination(key, tree[key])
+                    if dest != None:
+                        retval[key] = dest
+                    
         return retval
 
     ##
@@ -558,7 +567,7 @@ class PdfFileReader(object):
         if dest:
             if isinstance(dest, ArrayObject):
                 outline = self._buildDestination(title, dest)
-            elif isinstance(dest, unicode) and self._namedDests.has_key(dest):
+            elif isinstance(dest, (unicode, NameObject)) and self._namedDests.has_key(dest):
                 outline = self._namedDests[dest]
                 outline[NameObject("/Title")] = title
             else:

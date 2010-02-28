@@ -613,13 +613,99 @@ class TreeObject(DictionaryObject):
             prev = self['/Last']
 
         self[NameObject('/Last')] = child
-        self[NameObject('/Count')] = NumberObject(self['/Count'] + 1)
+        self[NameObject('/Count')] = NumberObject(self[NameObject('/Count')] + 1)
 
         if prev:
             childObj[NameObject('/Prev')] = pdf.getReference(prev)
             prev[NameObject('/Next')] = child
 
         childObj[NameObject('/Parent')] = pdf.getReference(self)
+        
+    def removeChild(self, child):
+        childObj = child.getObject()
+        
+        if not childObj.has_key(NameObject('/Parent')):
+            raise ValueError, "Removed child does not appear to be a tree item"
+        elif childObj[NameObject('/Parent')] != self:
+            raise ValueError, "Removed child is not a member of this tree"
+        
+        found = False
+        prevRef = None
+        prev = None
+        curRef = self[NameObject('/First')]
+        cur = curRef.getObject()
+        lastRef = self[NameObject('/Last')]
+        last = lastRef.getObject() 
+        while cur != None:
+            if cur == childObj:
+                if prev == None:
+                    if cur.has_key(NameObject('/Next')):
+                        # Removing first tree node
+                        nextRef = cur[NameObject('/Next')]
+                        next = nextRef.getObject()
+                        del next[NameObject('/Prev')]
+                        self[NameObject('/First')] = nextRef
+                        self[NameObject('/Count')] = self[NameObject('/Count')] - 1
+                        
+                    else:
+                        # Removing only tree node
+                        assert self[NameObject('/Count')] == 1
+                        del self[NameObject('/Count')]
+                        del self[NameObject('/First')]
+                        if self.has_key(NameObject('/Last')):
+                            del self[NameObject('/Last')]
+                else:
+                    if cur.has_key(NameObject('/Next')):
+                        # Removing middle tree node
+                        nextRef = cur[NameObject('/Next')]
+                        next = nextRef.getObject()
+                        next[NameObject('/Prev')] = prevRef
+                        prev[NameObject('/Next')] = nextRef
+                        self[NameObject('/Count')] = self[NameObject('/Count')] - 1
+                    else:
+                        # Removing last tree node
+                        assert cur == last
+                        del prev[NameObject('/Next')]
+                        self[NameObject('/Last')] = prevRef
+                        self[NameObject('/Count')] = self[NameObject('/Count')] - 1
+                found = True
+                break        
+                    
+            
+            prevRef = curRef
+            prev = cur
+            if cur.has_key(NameObject('/Next')):
+                curRef = cur[NameObject('/Next')]
+                cur = curRef.getObject()
+            else:
+                curRef = None
+                cur = None
+       
+        if not found:
+            raise ValueError, "Removal couldn't find item in tree"
+       
+        del childObj[NameObject('/Parent')]
+        if childObj.has_key(NameObject('/Next')):
+            del childObj[NameObject('/Next')]
+        if childObj.has_key(NameObject('/Prev')):
+            del childObj[NameObject('/Prev')]
+
+    def emptyTree(self):
+        for child in self:
+            childObj = child.getObject()
+            del childObj[NameObject('/Parent')]
+            if childObj.has_key(NameObject('/Next')):
+                del childObj[NameObject('/Next')]
+            if childObj.has_key(NameObject('/Prev')):
+                del childObj[NameObject('/Prev')]
+
+        if self.has_key(NameObject('/Count')):
+            del self[NameObject('/Count')]
+        if self.has_key(NameObject('/First')):
+            del self[NameObject('/First')]
+        if self.has_key(NameObject('/Last')):
+            del self[NameObject('/Last')]
+            
 
 class StreamObject(DictionaryObject):
     def __init__(self):
