@@ -604,6 +604,8 @@ class TreeObject(DictionaryObject):
         
     def addChild(self, child, pdf):
         childObj = child.getObject()
+        child = pdf.getReference(childObj)
+        assert isinstance(child, IndirectObject)
         
         if not self.has_key('/First'):
             self[NameObject('/First')] = child
@@ -616,10 +618,14 @@ class TreeObject(DictionaryObject):
         self[NameObject('/Count')] = NumberObject(self[NameObject('/Count')] + 1)
 
         if prev:
-            childObj[NameObject('/Prev')] = pdf.getReference(prev)
+            prevRef = pdf.getReference(prev)
+            assert isinstance(prevRef, IndirectObject)
+            childObj[NameObject('/Prev')] = prevRef
             prev[NameObject('/Next')] = child
 
-        childObj[NameObject('/Parent')] = pdf.getReference(self)
+        parentRef = pdf.getReference(self)
+        assert isinstance(parentRef, IndirectObject)
+        childObj[NameObject('/Parent')] = parentRef
         
     def removeChild(self, child):
         childObj = child.getObject()

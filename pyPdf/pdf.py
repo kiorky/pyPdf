@@ -349,6 +349,97 @@ class PdfFileWriter(object):
                 return newobj
         else:
             return data
+    
+    def getOutlineRoot(self):
+        root = self.getObject(self._root)
+
+        if root.has_key('/Outlines'):
+            outline = root['/Outlines']
+            idnum = self._objects.index(outline) + 1
+            outlineRef = IndirectObject(idnum, 0, self)
+            assert outlineRef.getObject() == outline 
+        else:
+            outline = TreeObject() 
+            outline.update({ })
+            outlineRef = self._addObject(outline)
+            root[NameObject('/Outlines')] = outlineRef
+            
+        return outline
+    
+    def addBookmarkDestination(self, dest, parent=None):
+        destRef = self._addObject(dest)
+
+        outlineRef = self.getOutlineRoot()
+        
+        if parent == None:
+            parent = outlineRef
+
+        parent = parent.getObject()
+        parent.addChild(destRef, self)
+        
+        return destRef
+    
+    def addBookmarkDict(self, bookmark, parent=None):
+        bookmarkObj = TreeObject()
+        for k, v in bookmark.items():
+            bookmarkObj[NameObject(str(k))] = v
+        bookmarkObj.update(bookmark)
+        
+        if bookmark.has_key('/A'):
+            action = DictionaryObject()
+            for k, v in bookmark['/A'].items():
+                action[NameObject(str(k))] = v
+            actionRef = self._addObject(action)
+            bookmarkObj['/A'] = actionRef
+            
+        bookmarkRef = self._addObject(bookmarkObj)
+
+        outlineRef = self.getOutlineRoot()
+        
+        if parent == None:
+            parent = outlineRef
+            
+        parent = parent.getObject()
+        parent.addChild(bookmarkRef, self)
+        
+        return bookmarkRef       
+    
+            
+    def addBookmark(self, title, pagenum, parent=None):
+        """
+        Add a bookmark to the pdf, using the specified title and pointing at 
+        the specified page number. A parent can be specified to make this a
+        nested bookmark below the parent.
+        """
+        pageRef = self.getObject(self._pages)['/Kids'][pagenum]
+        action = DictionaryObject()
+        action.update({
+            NameObject('/D') : ArrayObject([pageRef, NameObject('/FitH'), NumberObject(826)]),
+            NameObject('/S') : NameObject('/GoTo')
+        })
+        actionRef = self._addObject(action)
+
+        outlineRef = self.getOutlineRoot()
+        
+        if parent == None:
+            parent = outlineRef
+            
+
+        bookmark = TreeObject()
+
+        bookmark.update({
+            NameObject('/A') : actionRef,
+            NameObject('/Title') : createStringObject(title),
+        })
+
+        bookmarkRef = self._addObject(bookmark)
+        
+        parent = parent.getObject()
+        parent.addChild(bookmarkRef, self)
+        
+        return bookmarkRef
+
+
 
 ##
 # Initializes a PdfFileReader object.  This operation can take some time, as
@@ -1640,7 +1731,7 @@ class DocumentInformation(DictionaryObject):
 # A class representing a destination within a PDF file.
 # See section 8.2.1 of the PDF 1.6 reference.
 # Stability: Added in v1.10, will exist for all v1.x releases.
-class Destination(DictionaryObject):
+class Destination(TreeObject):
     def __init__(self, title, page, typ, *args):
         DictionaryObject.__init__(self)
         self[NameObject("/Title")] = title
@@ -1662,6 +1753,25 @@ class Destination(DictionaryObject):
             pass
         else:
             raise utils.PdfReadError("Unknown Destination Type: %r" % typ)
+
+    def writeToStream(self, stream, encryption_key):
+        stream.write("<<\n")
+        for key in [NameObject(x) for x in ['/Title', '/Parent', '/First', '/Last', '/Next', '/Prev'] if self.has_key(x)]:
+            key.writeToStream(stream, encryption_key)
+            stream.write(" ")
+            value = self.raw_get(key)
+            value.writeToStream(stream, encryption_key)
+            stream.write("\n")
+        key = NameObject('/Dest')
+        key.writeToStream(stream, encryption_key)
+        stream.write(" ")
+        value = self.getDestArray()
+        value.writeToStream(stream, encryption_key)
+        stream.write("\n")
+        stream.write(">>")
+        
+    def getDestArray(self):
+        return ArrayObject([self['/Page'], self['/Type']] + [self[x] for x in ['/Left','/Bottom','/Right','/Top','/Zoom'] if self.has_key(x)])
           
     ##
     # Read-only property accessing the destination title.
@@ -1702,6 +1812,7 @@ class Destination(DictionaryObject):
     # Read-only property accessing the bottom vertical coordinate.
     # @return A number, or None if not available.
     bottom = property(lambda self: self.get("/Bottom", None))
+
 
 def convertToInt(d, size):
     if size > 8:
