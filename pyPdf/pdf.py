@@ -365,6 +365,43 @@ class PdfFileWriter(object):
             root[NameObject('/Outlines')] = outlineRef
             
         return outline
+ 
+    def getNamedDestRoot(self):
+        root = self.getObject(self._root)
+
+        if root.has_key('/Names') and isinstance(root['/Names'], DictionaryObject):
+            names = root['/Names']
+            idnum = self._objects.index(names) + 1
+            namesRef = IndirectObject(idnum, 0, self)
+            assert namesRef.getObject() == names 
+            if names.has_key('/Dests') and isinstance(names['/Dests'], DictionaryObject):
+                dests = names['/Dests']
+                idnum = self._objects.index(dests) + 1
+                destsRef = IndirectObject(idnum, 0, self)
+                assert destsRef.getObject() == dests 
+                if dests.has_key('/Names'):
+                    nd = dests['/Names']
+                else:
+                    nd = ArrayObject()
+                    dests[NameObject('/Names')] = nd
+            else:
+                dests = DictionaryObject()
+                destsRef = self._addObject(dests)
+                names[NameObject('/Dests')] = destsRef
+                nd = ArrayObject()
+                dests[NameObject('/Names')] = nd
+                
+        else:
+            names = DictionaryObject()
+            namesRef = self._addObject(names)
+            root[NameObject('/Names')] = namesRef
+            dests = DictionaryObject()
+            destsRef = self._addObject(dests)
+            names[NameObject('/Dests')] = destsRef
+            nd = ArrayObject()
+            dests[NameObject('/Names')] = nd
+            
+        return nd
     
     def addBookmarkDestination(self, dest, parent=None):
         destRef = self._addObject(dest)
@@ -439,7 +476,29 @@ class PdfFileWriter(object):
         
         return bookmarkRef
 
+    def addNamedDestinationObject(self, dest):
+        destRef = self._addObject(dest)
 
+        nd = self.getNamedDestRoot()
+
+        nd.extend([dest['/Title'], destRef])
+        
+        return destRef      
+
+    def addNamedDestination(self, title, pagenum):
+        pageRef = self.getObject(self._pages)['/Kids'][pagenum]
+        dest = DictionaryObject()
+        dest.update({
+            NameObject('/D') : ArrayObject([pageRef, NameObject('/FitH'), NumberObject(826)]),
+            NameObject('/S') : NameObject('/GoTo')
+        })
+        
+        destRef = self._addObject(dest)
+        nd = self.getNamedDestRoot()
+
+        nd.extend([title, destRef])
+        
+        return destRef
 
 ##
 # Initializes a PdfFileReader object.  This operation can take some time, as
@@ -635,10 +694,10 @@ class PdfFileReader(object):
 
         return outlines
 
-    def _buildDestination(self, title, array):
+    def _buildDestination(self, title, array, classname=Destination):
         page, typ = array[0:2]
         array = array[2:]
-        return Destination(title, page, typ, *array)
+        return classname(title, page, typ, *array)
           
     def _buildOutline(self, node):
         dest, title, outline = None, None, None
@@ -657,7 +716,7 @@ class PdfFileReader(object):
         # if destination found, then create outline
         if dest:
             if isinstance(dest, ArrayObject):
-                outline = self._buildDestination(title, dest)
+                outline = self._buildDestination(title, dest, Bookmark)
             elif isinstance(dest, (unicode, NameObject)) and self._namedDests.has_key(dest):
                 outline = self._namedDests[dest]
                 outline[NameObject("/Title")] = title
@@ -1726,92 +1785,6 @@ class DocumentInformation(DictionaryObject):
     producer = property(lambda self: self.getText("/Producer"))
     producer_raw = property(lambda self: self.get("/Producer"))
 
-
-##
-# A class representing a destination within a PDF file.
-# See section 8.2.1 of the PDF 1.6 reference.
-# Stability: Added in v1.10, will exist for all v1.x releases.
-class Destination(TreeObject):
-    def __init__(self, title, page, typ, *args):
-        DictionaryObject.__init__(self)
-        self[NameObject("/Title")] = title
-        self[NameObject("/Page")] = page
-        self[NameObject("/Type")] = typ
-        
-        # from table 8.2 of the PDF 1.6 reference.
-        if typ == "/XYZ":
-            (self[NameObject("/Left")], self[NameObject("/Top")],
-                self[NameObject("/Zoom")]) = args
-        elif typ == "/FitR":
-            (self[NameObject("/Left")], self[NameObject("/Bottom")],
-                self[NameObject("/Right")], self[NameObject("/Top")]) = args
-        elif typ in ["/FitH", "FitBH"]:
-            self[NameObject("/Top")], = args
-        elif typ in ["/FitV", "FitBV"]:
-            self[NameObject("/Left")], = args
-        elif typ in ["/Fit", "FitB"]:
-            pass
-        else:
-            raise utils.PdfReadError("Unknown Destination Type: %r" % typ)
-
-    def writeToStream(self, stream, encryption_key):
-        stream.write("<<\n")
-        for key in [NameObject(x) for x in ['/Title', '/Parent', '/First', '/Last', '/Next', '/Prev'] if self.has_key(x)]:
-            key.writeToStream(stream, encryption_key)
-            stream.write(" ")
-            value = self.raw_get(key)
-            value.writeToStream(stream, encryption_key)
-            stream.write("\n")
-        key = NameObject('/Dest')
-        key.writeToStream(stream, encryption_key)
-        stream.write(" ")
-        value = self.getDestArray()
-        value.writeToStream(stream, encryption_key)
-        stream.write("\n")
-        stream.write(">>")
-        
-    def getDestArray(self):
-        return ArrayObject([self['/Page'], self['/Type']] + [self[x] for x in ['/Left','/Bottom','/Right','/Top','/Zoom'] if self.has_key(x)])
-          
-    ##
-    # Read-only property accessing the destination title.
-    # @return A string.
-    title = property(lambda self: self.get("/Title"))
-
-    ##
-    # Read-only property accessing the destination page.
-    # @return An integer.
-    page = property(lambda self: self.get("/Page"))
-
-    ##
-    # Read-only property accessing the destination type.
-    # @return A string.
-    typ = property(lambda self: self.get("/Type"))
-
-    ##
-    # Read-only property accessing the zoom factor.
-    # @return A number, or None if not available.
-    zoom = property(lambda self: self.get("/Zoom", None))
-
-    ##
-    # Read-only property accessing the left horizontal coordinate.
-    # @return A number, or None if not available.
-    left = property(lambda self: self.get("/Left", None))
-
-    ##
-    # Read-only property accessing the right horizontal coordinate.
-    # @return A number, or None if not available.
-    right = property(lambda self: self.get("/Right", None))
-
-    ##
-    # Read-only property accessing the top vertical coordinate.
-    # @return A number, or None if not available.
-    top = property(lambda self: self.get("/Top", None))
-
-    ##
-    # Read-only property accessing the bottom vertical coordinate.
-    # @return A number, or None if not available.
-    bottom = property(lambda self: self.get("/Bottom", None))
 
 
 def convertToInt(d, size):

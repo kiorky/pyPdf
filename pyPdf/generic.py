@@ -864,6 +864,115 @@ class RectangleObject(ArrayObject):
     upperRight = property(getUpperRight, setUpperRight, None, None)
 
 
+
+##
+# A class representing a destination within a PDF file.
+# See section 8.2.1 of the PDF 1.6 reference.
+# Stability: Added in v1.10, will exist for all v1.x releases.
+class Destination(TreeObject):
+    def __init__(self, title, page, typ, *args):
+        DictionaryObject.__init__(self)
+        self[NameObject("/Title")] = title
+        self[NameObject("/Page")] = page
+        self[NameObject("/Type")] = typ
+        
+        # from table 8.2 of the PDF 1.6 reference.
+        if typ == "/XYZ":
+            (self[NameObject("/Left")], self[NameObject("/Top")],
+                self[NameObject("/Zoom")]) = args
+        elif typ == "/FitR":
+            (self[NameObject("/Left")], self[NameObject("/Bottom")],
+                self[NameObject("/Right")], self[NameObject("/Top")]) = args
+        elif typ in ["/FitH", "FitBH"]:
+            self[NameObject("/Top")], = args
+        elif typ in ["/FitV", "FitBV"]:
+            self[NameObject("/Left")], = args
+        elif typ in ["/Fit", "FitB"]:
+            pass
+        else:
+            raise utils.PdfReadError("Unknown Destination Type: %r" % typ)
+            
+    def getDestArray(self):
+        return ArrayObject([self.raw_get('/Page'), self['/Type']] + [self[x] for x in ['/Left','/Bottom','/Right','/Top','/Zoom'] if self.has_key(x)])
+        
+    def writeToStream(self, stream, encryption_key):
+        stream.write("<<\n")
+        
+        key = NameObject('/D')
+        key.writeToStream(stream, encryption_key)
+        stream.write(" ")
+        value = self.getDestArray()
+        value.writeToStream(stream, encryption_key)
+
+        key = NameObject("/S")
+        key.writeToStream(stream, encryption_key)
+        stream.write(" ")
+        value = NameObject("/GoTo")
+        value.writeToStream(stream, encryption_key)
+        
+        stream.write("\n")
+        stream.write(">>")
+         
+    ##
+    # Read-only property accessing the destination title.
+    # @return A string.
+    title = property(lambda self: self.get("/Title"))
+
+    ##
+    # Read-only property accessing the destination page.
+    # @return An integer.
+    page = property(lambda self: self.get("/Page"))
+
+    ##
+    # Read-only property accessing the destination type.
+    # @return A string.
+    typ = property(lambda self: self.get("/Type"))
+
+    ##
+    # Read-only property accessing the zoom factor.
+    # @return A number, or None if not available.
+    zoom = property(lambda self: self.get("/Zoom", None))
+
+    ##
+    # Read-only property accessing the left horizontal coordinate.
+    # @return A number, or None if not available.
+    left = property(lambda self: self.get("/Left", None))
+
+    ##
+    # Read-only property accessing the right horizontal coordinate.
+    # @return A number, or None if not available.
+    right = property(lambda self: self.get("/Right", None))
+
+    ##
+    # Read-only property accessing the top vertical coordinate.
+    # @return A number, or None if not available.
+    top = property(lambda self: self.get("/Top", None))
+
+    ##
+    # Read-only property accessing the bottom vertical coordinate.
+    # @return A number, or None if not available.
+    bottom = property(lambda self: self.get("/Bottom", None))
+        
+
+class Bookmark(Destination):
+    def writeToStream(self, stream, encryption_key):
+        stream.write("<<\n")
+        for key in [NameObject(x) for x in ['/Title', '/Parent', '/First', '/Last', '/Next', '/Prev'] if self.has_key(x)]:
+            key.writeToStream(stream, encryption_key)
+            stream.write(" ")
+            value = self.raw_get(key)
+            value.writeToStream(stream, encryption_key)
+            stream.write("\n")
+        key = NameObject('/Dest')
+        key.writeToStream(stream, encryption_key)
+        stream.write(" ")
+        value = self.getDestArray()
+        value.writeToStream(stream, encryption_key)
+        stream.write("\n")
+        stream.write(">>")
+        
+ 
+
 def encode_pdfdocencoding(unicode_string):
     retval = ''
     for c in unicode_string:

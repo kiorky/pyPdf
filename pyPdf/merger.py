@@ -37,6 +37,7 @@ class _MergedPage(object):
     def __init__(self, pagedata, src, id):
         self.src = src
         self.pagedata = pagedata
+        self.out_pagedata = None
         self.id = id
         
 class PdfFileMerger(object):
@@ -58,6 +59,7 @@ class PdfFileMerger(object):
         self.pages = []
         self.output = PdfFileWriter()
         self.bookmarks = []
+        self.named_dests = []
         self.id_count = 0
         
     def merge(self, position, fileobj, bookmark=None, pages=None, import_bookmarks=True):
@@ -97,7 +99,7 @@ class PdfFileMerger(object):
         srcpages = []
         
         if bookmark:
-            bookmark = Destination(TextStringObject(bookmark), NumberObject(self.id_count), NameObject('/Fit'))
+            bookmark = Bookmark(TextStringObject(bookmark), NumberObject(self.id_count), NameObject('/Fit'))
         
         outline = []
         if import_bookmarks:
@@ -108,6 +110,10 @@ class PdfFileMerger(object):
             self.bookmarks += [bookmark, outline]
         else:
             self.bookmarks += outline
+        
+        dests = pdfr.namedDestinations
+        dests = self._trim_dests(pdfr, dests, pages)
+        self.named_dests += dests
         
         # Gather all the pages that are going to be merged
         for i in range(*pages):
@@ -120,6 +126,7 @@ class PdfFileMerger(object):
             
             srcpages.append(mp)
 
+        self._associate_dests_to_pages(srcpages)
         self._associate_bookmarks_to_pages(srcpages)
             
         
@@ -157,9 +164,11 @@ class PdfFileMerger(object):
         # Add pages to the PdfFileWriter
         for page in self.pages:
             self.output.addPage(page.pagedata)
+            page.out_pagedata = self.output.getReference(self.output._pages.getObject()["/Kids"][-1].getObject())
 
-            
+
         # Once all pages are added, create bookmarks to point at those pages
+        self._write_dests()
         self._write_bookmarks()
         
         # Write the output to the file   
@@ -183,7 +192,22 @@ class PdfFileMerger(object):
         
         self.inputs = []
         self.output = None
-      
+    
+    def _trim_dests(self, pdf, dests, pages):
+        """
+        Removes any named destinations that are not a part of the specified page set
+        """
+        new_dests = []
+        prev_header_added = True
+        for k, o in dests.items():
+            for j in range(*pages):
+                if pdf.getPage(j).getObject() == o['/Page'].getObject():
+                    o[NameObject('/Page')] = o['/Page'].getObject()
+                    assert str(k) == str(o['/Title'])
+                    new_dests.append(o)
+                    break
+        return new_dests
+    
     def _trim_outline(self, pdf, outline, pages):
         """
         Removes any outline/bookmark entries that are not a part of the specified page set
@@ -207,10 +231,26 @@ class PdfFileMerger(object):
                         break
         return new_outline
    
+    def _write_dests(self):
+        dests = self.named_dests
+        
+        for v in dests:
+            pageno = None
+            pdf = None
+            if v.has_key('/Page'):
+                for i, p in enumerate(self.pages):
+                    if p.id == v['/Page']:
+                        v[NameObject('/Page')] = p.out_pagedata
+                        pageno = i
+                        pdf = p.src
+            if pageno != None:
+                self.output.addNamedDestinationObject(v)
  
     def _write_bookmarks(self, bookmarks=None, parent=None):
+        
         if bookmarks == None:
             bookmarks = self.bookmarks
+        
 
         last_added = None
         for b in bookmarks:
@@ -223,10 +263,29 @@ class PdfFileMerger(object):
             if b.has_key('/Page'):
                 for i, p in enumerate(self.pages):
                     if p.id == b['/Page']:
+                        b[NameObject('/Page')] = p.out_pagedata
                         pageno = i
                         pdf = p.src
             if pageno != None:
                 last_added = self.output.addBookmarkDestination(b, parent)
+    
+
+    def _associate_dests_to_pages(self, pages):
+        for nd in self.named_dests:
+            pageno = None
+            np = nd['/Page']
+            
+            if type(np) == NumberObject:
+                continue
+            
+            for p in pages:
+                if np.getObject() == p.pagedata.getObject():
+                    pageno = p.id
+            
+            if pageno != None:
+                nd[NameObject('/Page')] = NumberObject(pageno)
+            else:
+                raise ValueError, "Unresolved named destination '%s'" % (nd['/Title'],)
     
     def _associate_bookmarks_to_pages(self, pages, bookmarks=None):
         if bookmarks == None:
@@ -252,126 +311,58 @@ class PdfFileMerger(object):
             else:
                 raise ValueError, "Unresolved bookmark '%s'" % (b['/Title'],)
                 
-     
+    def findBookmark(self, bookmark, root=None):
+    	if root == None:
+    		root = self.bookmarks
+    	
+    	for i, b in enumerate(root):
+    		if type(b) == list:
+    			res = self.findBookmark(bookmark, b)
+    			if res:
+    				return [i] + res
+    		if b == bookmark or b['/Title'] == bookmark:
+    			return [i]
+    
+    	return None
 
-    def addBookmarkDict(self, pdf, bookmark, parent=None):
-        return pdf.addBookmarkDict(bookmark, parent)
-
-    def addBookmark(self, pdf, title, pagenum, parent=None):
+    def addBookmark(self, title, pagenum, parent=None):
         """
         Add a bookmark to the pdf, using the specified title and pointing at 
         the specified page number. A parent can be specified to make this a
         nested bookmark below the parent.
         """
-        return pdf.addBookmark(title, pagenum, parent)
+
+        if parent == None:
+        	iloc = [len(self.bookmarks)-1]
+        elif type(parent) == list:
+        	iloc = parent
+        else:
+        	iloc = self.findBookmark(parent)
         
-    def getNamedDestinations(self, tree=None, retval=None):
-        if retval == None:
-            retval = {}
-            catalog = self.output._root.getObject()
-            
-            # get the name tree
-            if catalog.has_key("/Dests"):
-                tree = catalog["/Dests"]
-            elif catalog.has_key("/Names"):
-                names = catalog['/Names']
-                if isinstance(names, DictionaryObject) and names.has_key("/Dests"):
-                    tree = names['/Dests']
+        dest = Bookmark(TextStringObject(title), NumberObject(pagenum), NameObject('/FitH'), NumberObject(826))
         
-        if tree == None or not isinstance(tree, DictionaryObject):
-            return retval
-
-        if tree.has_key("/Kids"):
-            # recurse down the tree
-            for kid in tree["/Kids"]:
-                self.getNamedDestinations(kid.getObject(), retval)
-
-        if tree.has_key("/Names"):
-            names = tree["/Names"]
-            for i in range(0, len(names), 2):
-                key = names[i].getObject()
-                val = names[i+1].getObject()
-                if isinstance(val, DictionaryObject) and val.has_key('/D'):
-                    val = val['/D']
-                dest = self._buildDestination(key, val)
-                if dest != None:
-                    retval[key] = dest
-
-        if not tree.has_key("/Names") and not tree.has_key("/Kids"):
-            for key in tree.keys():
-                if isinstance(tree[key], ArrayObject) and isinstance(tree[key][0], PdfObject):
-                    dest = self._buildDestination(key, tree[key])
-                    if dest != None:
-                        retval[key] = dest
-                    
-        return retval
-
-    def getOutlines(self, node=None, outlines=None):
-        return self.bookmarks
-        if outlines == None:
-            outlines = []
-            catalog = self.output._root.getObject()
-            
-            # get the outline dictionary and named destinations
-            if catalog.has_key("/Outlines"):
-                lines = catalog["/Outlines"]
-                if isinstance(lines, DictionaryObject) and lines.has_key("/First"):
-                    node = lines["/First"]
-                outlines = OutlinesObject(self, lines)
-            self._namedDests = self.getNamedDestinations()
-            
-        if node == None:
-          return outlines
-          
-        # see if there are any more outlines
-        while 1:
-            outline = self._buildOutline(node)
-            if outline:
-                outlines.append(outline)
-
-            # check for sub-outlines
-            if node.has_key("/First"):
-                subOutlines = OutlinesObject(self, node)
-                self.getOutlines(node["/First"], subOutlines)
-                if subOutlines:
-                    outlines.append(subOutlines)
-
-            if not node.has_key("/Next"):
-                break
-            node = node["/Next"]
-
-        return outlines
+        if parent == None:
+        	self.bookmarks.append(dest)
+        else:
+        	bmparent = self.bookmarks
+        	for i in iloc[:-1]:
+        		bmparent = bmparent[i]
+        	npos = iloc[-1]+1
+        	if npos < len(bmparent) and type(bmparent[npos]) == list:
+        		bmparent[npos].append(dest)
+        	else:
+        		bmparent.insert(npos, [dest])
+        		
         
-    def _buildDestination(self, title, array):
-        page, typ = array[0:2]
-        array = array[2:]
-        return Destination(title, page, typ, *array)
-          
-    def _buildOutline(self, node):
-        dest, title, outline = None, None, None
+    def addNamedDestination(self, title, pagenum):
+        """
+        Add a destination to the pdf, using the specified title and pointing
+        at the specified page number.
+        """
         
-        if node.has_key("/A") and node.has_key("/Title"):
-            # Action, section 8.5 (only type GoTo supported)
-            title  = node["/Title"]
-            action = node["/A"]
-            if action["/S"] == "/GoTo":
-                dest = action["/D"]
-        elif node.has_key("/Dest") and node.has_key("/Title"):
-            # Destination, section 8.2.1
-            title = node["/Title"]
-            dest  = node["/Dest"]
+        dest = Destination(TextStringObject(title), NumberObject(pagenum), NameObject('/FitH'), NumberObject(826))
+        self.named_dests.append(dest)
 
-        # if destination found, then create outline
-        if dest:
-            if isinstance(dest, ArrayObject):
-                outline = self._buildDestination(title, dest)
-            elif isinstance(dest, (unicode, NameObject)) and self._namedDests.has_key(dest):
-                outline = self._namedDests[dest]
-                outline[NameObject("/Title")] = title
-            else:
-                raise utils.PdfReadError("Unexpected destination %r" % dest)
-        return outline
-    
 
 class OutlinesObject(list):
     def __init__(self, pdf, tree, parent=None):
