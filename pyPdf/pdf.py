@@ -697,8 +697,14 @@ class PdfFileReader(object):
     def _buildDestination(self, title, array, classname=Destination):
         page, typ = array[0:2]
         array = array[2:]
-        return classname(title, page, typ, *array)
-          
+        try:
+            rv = classname(title, page, typ, *array)
+        except utils.PdfReadError:
+            rv = None
+            warnings.warn("""Destination "%s" has unknown type: %r""" % (title, typ), utils.PdfReadWarning)
+        return rv
+
+        
     def _buildOutline(self, node):
         dest, title, outline = None, None, None
         
@@ -721,7 +727,9 @@ class PdfFileReader(object):
                 outline = self._namedDests[dest]
                 outline[NameObject("/Title")] = title
             else:
-                raise utils.PdfReadError("Unexpected destination %r" % dest)
+                #raise utils.PdfReadError()
+                warnings.warn("Unexpected destination %r" % dest, utils.PdfReadWarning)
+                return None
         return outline
 
     ##

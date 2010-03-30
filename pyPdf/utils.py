@@ -113,6 +113,9 @@ class PdfReadError(PyPdfError):
 
 class PageSizeNotDefinedError(PyPdfError):
     pass
+    
+class PdfReadWarning(UserWarning):
+    pass
 
 if __name__ == "__main__":
     # test RC4
