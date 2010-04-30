@@ -259,7 +259,7 @@ class PdfFileWriter(object):
         # Begin writing:
         object_positions = []
         stream.write(self._header + "\n")
-        for i in range(len(self._objects)):
+        for i in xrange(len(self._objects)):
             idnum = (i + 1)
             obj = self._objects[i]
             object_positions.append(stream.tell())
@@ -300,63 +300,91 @@ class PdfFileWriter(object):
         # eof
         stream.write("\nstartxref\n%s\n%%%%EOF\n" % (xref_location))
 
-    def _sweepIndirectReferences(self, externMap, data):
-        if id(data) in self._swept_cache:
-            return data
-        if isinstance(data, DictionaryObject):
-            self._swept_cache[id(data)] = 1
+    # Implementation using a stack along with other performance enhancements.
+    # Uses a stack to trace through the PDF object tree, instead of recursion.
+    # Also includes various other optimizations.
+    def _sweepIndirectReferences(self, externMap, rootdata):
+        tstack = []
+        tstack.append((rootdata, None, None))
+
+        def handle_dictionary(data):
+            """
+            Handles the case where data is a DictionaryObject.
+            """
             for key, value in data.items():
-                origvalue = value
-                value = self._sweepIndirectReferences(externMap, value)
+                if not value.sweep_required:
+                    continue
+
                 if isinstance(value, StreamObject):
                     # a dictionary value is a stream.  streams must be indirect
                     # objects, so we need to change this value.
                     value = self._addObject(value)
+
                 data[key] = value
+                tstack.append((value, data, key))
             return data
-        elif isinstance(data, ArrayObject):
-            self._swept_cache[id(data)] = 1
-            for i in range(len(data)):
-                value = self._sweepIndirectReferences(externMap, data[i])
+
+        def handle_array(data):
+            """
+            Handles the case where data is an ArrayObject.
+            """
+            for i in xrange(len(data)):
+                if not data[i].sweep_required:
+                    continue
+
+                value=data[i]
                 if isinstance(value, StreamObject):
                     # an array value is a stream.  streams must be indirect
                     # objects, so we need to change this value
                     value = self._addObject(value)
+
                 data[i] = value
+                tstack.append((value, data, i))
             return data
-        elif isinstance(data, IndirectObject):
-            # internal indirect references are fine
-            if data.pdf == self:
-                ident = "%s %s" % (data.idnum, data.generation)
-                if ident in self._swept_cache:
-                    return data
-                self._swept_cache[ident] = 1
-                if data.idnum in self.stack:
-                    return data
-                else:
+
+        def handle_indirect_refs(data):
+            """
+            Handles the case where data is an IndirectObject.
+            """
+            # Checking whether data is an internal refernce.
+            if data.pdf is self:
+                if not data.idnum in self.stack:
+                    # Reference not resolved yet so we resolve it and keep
+                    # going.
                     self.stack.append(data.idnum)
                     realdata = self.getObject(data)
-                    self._sweepIndirectReferences(externMap, realdata)
-                    self.stack.pop()
-                    return data
+                    tstack.append((realdata, None, None))
+                return data
+
+            newobj = externMap.get(data.pdf, {}).get(data.generation, {}).get(data.idnum, None)
+            if newobj is None:
+                newobj = data.pdf.getObject(data)
+                self._objects.append(None) # placeholder
+                idnum = len(self._objects)
+                newobj_ido = IndirectObject(idnum, 0, self)
+                if not externMap.has_key(data.pdf):
+                    externMap[data.pdf] = {}
+                if not externMap[data.pdf].has_key(data.generation):
+                    externMap[data.pdf][data.generation] = {}
+                externMap[data.pdf][data.generation][data.idnum] = newobj_ido
+                tstack.append((newobj, self._objects, idnum-1))
+                return newobj_ido
+            return newobj
+
+        while tstack:
+            data, parent_data, parent_key = tstack.pop()
+
+            if isinstance(data, DictionaryObject):
+                out_val = handle_dictionary(data)
+            elif isinstance(data, ArrayObject):
+                out_val = handle_array(data)
+            elif isinstance(data, IndirectObject):
+                out_val = handle_indirect_refs(data)
             else:
-                newobj = externMap.get(data.pdf, {}).get(data.generation, {}).get(data.idnum, None)
-                if newobj == None:
-                    newobj = data.pdf.getObject(data)
-                    self._objects.append(None) # placeholder
-                    idnum = len(self._objects)
-                    newobj_ido = IndirectObject(idnum, 0, self)
-                    if not externMap.has_key(data.pdf):
-                        externMap[data.pdf] = {}
-                    if not externMap[data.pdf].has_key(data.generation):
-                        externMap[data.pdf][data.generation] = {}
-                    externMap[data.pdf][data.generation][data.idnum] = newobj_ido
-                    newobj = self._sweepIndirectReferences(externMap, newobj)
-                    self._objects[idnum-1] = newobj
-                    return newobj_ido
-                return newobj
-        else:
-            return data
+                out_val = None
+
+            if parent_data:
+                parent_data[parent_key] = out_val
     
     def getOutlineRoot(self):
         root = self.getObject(self._root)
@@ -488,7 +516,6 @@ class PdfFileWriter(object):
         destRef = self._addObject(dest)
 
         nd = self.getNamedDestRoot()
-
         nd.extend([dest['/Title'], destRef])
         
         return destRef      
@@ -638,7 +665,7 @@ class PdfFileReader(object):
 
         if tree.has_key("/Names"):
             names = tree["/Names"]
-            for i in range(0, len(names), 2):
+            for i in xrange(0, len(names), 2):
                 key = names[i].getObject()
                 val = names[i+1].getObject()
                 if isinstance(val, DictionaryObject) and val.has_key('/D'):
@@ -790,7 +817,7 @@ class PdfFileReader(object):
             assert objStm['/Type'] == '/ObjStm'
             assert idx < objStm['/N']
             streamData = StringIO(objStm.getData())
-            for i in range(objStm['/N']):
+            for i in xrange(objStm['/N']):
                 objnum = NumberObject.readFromStream(streamData)
                 readNonWhitespace(streamData)
                 streamData.seek(-1, 1)
@@ -845,7 +872,7 @@ class PdfFileReader(object):
             for dictkey, value in obj.items():
                 obj[dictkey] = self._decryptObject(value, key)
         elif isinstance(obj, ArrayObject):
-            for i in range(len(obj)):
+            for i in xrange(len(obj)):
                 obj[i] = self._decryptObject(obj[i], key)
         return obj
 
@@ -972,7 +999,7 @@ class PdfFileReader(object):
                 for num, size in self._pairs(idx_pairs):
                     cnt = 0
                     while cnt < size:
-                        for i in range(len(entrySizes)):
+                        for i in xrange(len(entrySizes)):
                             d = streamData.read(entrySizes[i])
                             di = convertToInt(d, entrySizes[i])
                             if i == 0:
@@ -1096,9 +1123,9 @@ class PdfFileReader(object):
                 userpass = utils.RC4_encrypt(key, real_O)
             else:
                 val = real_O
-                for i in range(19, -1, -1):
+                for i in xrange(19, -1, -1):
                     new_key = ''
-                    for l in range(len(key)):
+                    for l in xrange(len(key)):
                         new_key += chr(ord(key[l]) ^ i)
                     val = utils.RC4_encrypt(new_key, val)
                 userpass = val
@@ -1252,7 +1279,7 @@ class PageObject(DictionaryObject):
             return stream
         stream = ContentStream(stream, pdf)
         for operands,operator in stream.operations:
-            for i in range(len(operands)):
+            for i in xrange(len(operands)):
                 op = operands[i]
                 if isinstance(op, NameObject):
                     operands[i] = rename.get(op, op)
@@ -1850,7 +1877,7 @@ def _alg32(password, rev, keylen, owner_entry, p_entry, id1_entry, metadata_encr
     # encryption key as defined by the value of the encryption dictionary's
     # /Length entry.
     if rev >= 3:
-        for i in range(50):
+        for i in xrange(50):
             md5_hash = md5(md5_hash[:keylen]).digest()
     # 9. Set the encryption key to the first n bytes of the output from the
     # final MD5 hash, where n is always 5 for revision 2 but, for revision 3 or
@@ -1876,9 +1903,9 @@ def _alg33(owner_pwd, user_pwd, rev, keylen):
     # an XOR operation between that byte and the single-byte value of the
     # iteration counter (from 1 to 19).
     if rev >= 3:
-        for i in range(1, 20):
+        for i in xrange(1, 20):
             new_key = ''
-            for l in range(len(key)):
+            for l in xrange(len(key)):
                 new_key += chr(ord(key[l]) ^ i)
             val = utils.RC4_encrypt(new_key, val)
     # 8. Store the output from the final invocation of the RC4 as the value of
@@ -1898,7 +1925,7 @@ def _alg33_1(password, rev, keylen):
     # from the previous MD5 hash and pass it as input into a new MD5 hash.
     md5_hash = m.digest()
     if rev >= 3:
-        for i in range(50):
+        for i in xrange(50):
             md5_hash = md5(md5_hash).digest()
     # 4. Create an RC4 encryption key using the first n bytes of the output
     # from the final MD5 hash, where n is always 5 for revision 2 but, for
@@ -1946,9 +1973,9 @@ def _alg35(password, rev, keylen, owner_entry, p_entry, id1_entry, metadata_encr
     # the original encryption key (obtained in step 2) and performing an XOR
     # operation between that byte and the single-byte value of the iteration
     # counter (from 1 to 19). 
-    for i in range(1, 20):
+    for i in xrange(1, 20):
         new_key = ''
-        for l in range(len(key)):
+        for l in xrange(len(key)):
             new_key += chr(ord(key[l]) ^ i)
         val = utils.RC4_encrypt(new_key, val)
     # 6. Append 16 bytes of arbitrary padding to the output from the final

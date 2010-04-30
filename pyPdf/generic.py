@@ -87,6 +87,8 @@ def readObject(stream, pdf):
             return NumberObject.readFromStream(stream)
 
 class PdfObject(object):
+    sweep_required = False
+
     def getObject(self):
         """Resolves indirect references."""
         return self
@@ -126,6 +128,8 @@ class BooleanObject(PdfObject):
 
 
 class ArrayObject(list, PdfObject):
+    sweep_required = True
+
     def writeToStream(self, stream, encryption_key):
         stream.write("[")
         for data in self:
@@ -156,6 +160,8 @@ class ArrayObject(list, PdfObject):
 
 
 class IndirectObject(PdfObject):
+    sweep_required = True
+
     def __init__(self, idnum, generation, pdf):
         self.idnum = idnum
         self.generation = generation
@@ -437,6 +443,7 @@ class NameObject(str, PdfObject):
 
 
 class DictionaryObject(dict, PdfObject):
+    sweep_required = True
 
     def __init__(self, *args, **kwargs):
         if len(args) == 0:
