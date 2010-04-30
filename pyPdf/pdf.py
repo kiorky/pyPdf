@@ -381,7 +381,11 @@ class PdfFileWriter(object):
             elif isinstance(data, IndirectObject):
                 out_val = handle_indirect_refs(data)
             else:
-                out_val = None
+                "ahall's patch used the following line:"
+                #out_val = None
+                "this does not seem to work in all cases, so I changed it to this:"
+                out_val = data
+
 
             if parent_data:
                 parent_data[parent_key] = out_val
