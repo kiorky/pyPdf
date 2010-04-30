@@ -1,2 +1,7 @@
-*.pyc
-*.swp
+*pyc
+*egg-info
+dist
+eggs/
+develop-eggs/
+.installed.cfg
+bin
